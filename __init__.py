@@ -24,121 +24,75 @@ bl_info = {
 }
 
 import bpy
-from bpy.types import Panel, PropertyGroup, Collection
-from bpy.props import CollectionProperty, PointerProperty, StringProperty
+from bpy.types import Panel
 
 class COLLECTION_PT_LinkProperties(Panel):
     """Collection Link Panel"""
-    bl_label = "Collection Link"
+    bl_label = "Collection Link Panel"
     bl_idname = "COLLECTION_PT_link_properties"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
 
     def draw(self, context):
+        pass
+
+class COLLECTION_PT_CollectionLinking(Panel):
+    """Collection Linking"""
+    bl_label = "Linking to"
+    bl_idname = "COLLECTION_PT_collection_linking"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "collection"
+    bl_parent_id = "COLLECTION_PT_link_properties"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
         layout = self.layout
         collection = context.collection
         
-        if collection is None:
-            layout.label(text="コレクションが選択されていません")
-            return
-
-        # リンク コレクション（親コレクション）
-        box = layout.box()
-        col = box.column()
-        col.label(text="リンク コレクション", icon='LINKED')
-        
+        col = layout.column()
         parent_count = 0
         for other_col in bpy.data.collections:
-            if collection in other_col.children:
+            if collection in other_col.children.values():
                 parent_count += 1
-                row = col.row()
-                row.label(text=other_col.name, icon='OUTLINER_COLLECTION')
-                # リンク解除ボタン
-                row.operator(
-                    'collection.unlink_parent',
-                    text="",
-                    icon='UNLINKED'
-                ).collection_name = collection.name
-                row.operator(
-                    'wm.context_set_string',
-                    text="",
-                    icon='HAND'
-                ).value = other_col.name
-        
+                col.label(text=other_col.name, icon='OUTLINER_COLLECTION')
+
         if parent_count == 0:
-            col.label(text="なし", icon='BLANK1')
+            col.label(text="None")
 
-        layout.separator()
+class COLLECTION_PT_CollectionLinked(Panel):
+    """Collection Linked"""
+    bl_label = "Linked from"
+    bl_idname = "COLLECTION_PT_collection_linked"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "collection"
+    bl_parent_id = "COLLECTION_PT_link_properties"
+    bl_options = {'DEFAULT_CLOSED'}
 
-        # コレクション リンク（子コレクション）
-        box = layout.box()
-        col = box.column()
-        col.label(text="コレクション リンク", icon='LINKED')
+    def draw(self, context):
+        layout = self.layout
+        collection = context.collection
         
+        col = layout.column()
         child_count = len(collection.children)
         
         if child_count > 0:
             for child_col in collection.children:
                 row = col.row()
                 row.label(text=child_col.name, icon='OUTLINER_COLLECTION')
-                # リンク解除ボタン
-                row.operator(
-                    'collection.unlink_child',
-                    text="",
-                    icon='UNLINKED'
-                ).child_name = child_col.name
         else:
-            col.label(text="なし", icon='BLANK1')
-
-
-class COLLECTION_OT_UnlinkParent(bpy.types.Operator):
-    """親コレクションをアンリンク"""
-    bl_idname = 'collection.unlink_parent'
-    bl_label = 'Unlink Parent Collection'
-    
-    collection_name: StringProperty()
-    
-    def execute(self, context):
-        # 現在選択中のコレクション
-        current_collection = context.collection
-        
-        # すべてのコレクションをチェック
-        for col in bpy.data.collections:
-            if col.name == self.collection_name and current_collection in col.children:
-                col.children.unlink(current_collection)
-                self.report({'INFO'}, f"'{col.name}'から'{current_collection.name}'をアンリンク")
-                return {'FINISHED'}
-        
-        return {'CANCELLED'}
-
-
-class COLLECTION_OT_UnlinkChild(bpy.types.Operator):
-    """子コレクションをアンリンク"""
-    bl_idname = 'collection.unlink_child'
-    bl_label = 'Unlink Child Collection'
-    
-    child_name: StringProperty()
-    
-    def execute(self, context):
-        current_collection = context.collection
-        
-        for child in current_collection.children:
-            if child.name == self.child_name:
-                current_collection.children.unlink(child)
-                self.report({'INFO'}, f"'{current_collection.name}'から'{child.name}'をアンリンク")
-                return {'FINISHED'}
-        
-        return {'CANCELLED'}
+            col.label(text="None")
 
 
 def register():
     bpy.utils.register_class(COLLECTION_PT_LinkProperties)
-    bpy.utils.register_class(COLLECTION_OT_UnlinkParent)
-    bpy.utils.register_class(COLLECTION_OT_UnlinkChild)
+    bpy.utils.register_class(COLLECTION_PT_CollectionLinking)
+    bpy.utils.register_class(COLLECTION_PT_CollectionLinked)
 
 
 def unregister():
     bpy.utils.unregister_class(COLLECTION_PT_LinkProperties)
-    bpy.utils.unregister_class(COLLECTION_OT_UnlinkParent)
-    bpy.utils.unregister_class(COLLECTION_OT_UnlinkChild)
+    bpy.utils.unregister_class(COLLECTION_PT_CollectionLinking)
+    bpy.utils.unregister_class(COLLECTION_PT_CollectionLinked)
