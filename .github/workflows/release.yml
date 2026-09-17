@@ -1,0 +1,82 @@
+name: Release Blender extension
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check tag matches extension version
+        run: |
+          python - <<'PY'
+          import os
+          import ast
+          from pathlib import Path
+          import tomllib
+
+          manifest = tomllib.loads(Path("blender_manifest.toml").read_text(encoding="utf-8"))
+          expected = f"v{manifest['version']}"
+          actual = os.environ["GITHUB_REF_NAME"]
+          if actual != expected:
+              raise SystemExit(f"Tag {actual} does not match manifest version {expected}")
+          addon = ast.parse(Path("__init__.py").read_text(encoding="utf-8"))
+          info = ast.literal_eval(next(node.value for node in addon.body
+                                       if isinstance(node, ast.Assign)
+                                       and any(isinstance(target, ast.Name) and target.id == "bl_info"
+                                               for target in node.targets)))
+          addon_version = ".".join(map(str, info["version"]))
+          if addon_version != manifest["version"]:
+              raise SystemExit(f"Add-on version {addon_version} does not match manifest version {manifest['version']}")
+          PY
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Download Blender 4.5 LTS
+        run: |
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/blender.tar.xz" \
+            https://download.blender.org/release/Blender4.5/blender-4.5.13-linux-x64.tar.xz
+          tar -xf "$RUNNER_TEMP/blender.tar.xz" -C "$RUNNER_TEMP"
+
+      - name: Build and validate extension
+        run: |
+          archive="dist/collection_link_panel-${GITHUB_REF_NAME#v}.zip"
+          mkdir -p dist
+          "$RUNNER_TEMP/blender-4.5.13-linux-x64/blender" --command extension build --output-filepath "$archive"
+          "$RUNNER_TEMP/blender-4.5.13-linux-x64/blender" --command extension validate "$archive"
+
+      - name: Check release archive contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          archives = list(Path("dist").glob("*.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected one release archive, found {archives}")
+          with ZipFile(archives[0]) as archive:
+              names = set(archive.namelist())
+          expected = {"__init__.py", "blender_manifest.toml", "LICENSE"}
+          if names != expected:
+              raise SystemExit(f"Unexpected files in release archive: {sorted(names)}")
+          PY
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

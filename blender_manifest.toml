@@ -5,17 +5,17 @@ schema_version = "1.0.0"
 id = "collection_link_panel"
 version = "1.0.0"
 name = "Collection Link Panel"
-tagline = "This is another extension"
+tagline = "Inspect and edit collection links in Properties"
 maintainer = "yozba"
 # Supported types: "add-on", "theme"
 type = "add-on"
 
 # Optional link to documentation, support, source files, etc
-# website = "https://extensions.blender.org/add-ons/my-example-package/"
+website = "https://github.com/yozba/Collection_Link_Panel"
 
 # Optional list defined by Blender and server, see:
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
-tags = ["Animation", "Sequencer"]
+tags = ["Scene", "User Interface"]
 
 blender_version_min = "4.2.0"
 # # Optional: Blender version that the extension does not support, earlier versions are supported.
@@ -65,9 +65,9 @@ license = [
 
 # Optional: build settings.
 # https://docs.blender.org/manual/en/dev/advanced/extensions/command_line_arguments.html#command-line-args-extension-build
-# [build]
-# paths_exclude_pattern = [
-#   "__pycache__/",
-#   "/.git/",
-#   "/*.zip",
-# ]
+[build]
+paths = [
+  "__init__.py",
+  "blender_manifest.toml",
+  "LICENSE",
+]
