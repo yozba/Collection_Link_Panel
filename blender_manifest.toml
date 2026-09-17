@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "collection_link_panel"
-version = "1.0.0"
+version = "1.0.1"
 name = "Collection Link Panel"
 tagline = "Inspect and edit collection links in Properties"
 maintainer = "yozba"
@@ -68,6 +68,5 @@ license = [
 [build]
 paths = [
   "__init__.py",
-  "blender_manifest.toml",
   "LICENSE",
 ]

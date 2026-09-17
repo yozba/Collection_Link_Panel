@@ -1,6 +1,7 @@
 name: Release Blender extension
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -29,7 +30,7 @@ jobs:
           manifest = tomllib.loads(Path("blender_manifest.toml").read_text(encoding="utf-8"))
           expected = f"v{manifest['version']}"
           actual = os.environ["GITHUB_REF_NAME"]
-          if actual != expected:
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and actual != expected:
               raise SystemExit(f"Tag {actual} does not match manifest version {expected}")
           addon = ast.parse(Path("__init__.py").read_text(encoding="utf-8"))
           info = ast.literal_eval(next(node.value for node in addon.body
@@ -53,7 +54,8 @@ jobs:
 
       - name: Build and validate extension
         run: |
-          archive="dist/collection_link_panel-${GITHUB_REF_NAME#v}.zip"
+          version="$(python -c 'import tomllib; print(tomllib.load(open("blender_manifest.toml", "rb"))["version"])')"
+          archive="dist/collection_link_panel-${version}.zip"
           mkdir -p dist
           "$RUNNER_TEMP/blender-4.5.13-linux-x64/blender" --command extension build --output-filepath "$archive"
           "$RUNNER_TEMP/blender-4.5.13-linux-x64/blender" --command extension validate "$archive"
@@ -75,6 +77,7 @@ jobs:
           PY
 
       - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
