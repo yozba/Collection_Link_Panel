@@ -14,10 +14,10 @@
 bl_info = {
     "name": "Collection Link Panel",
     "author": "yozba",
-    "description": "Display and edit collection links in the Collection properties panel",
+    "description": "Display and edit collection links in Collection and Scene properties",
     "blender": (4, 2, 0),
     "version": (1, 0, 0),
-    "location": "Properties > Collection",
+    "location": "Properties > Collection, Scene",
     "warning": "",
     "category": "Scene",
 }
@@ -88,6 +88,8 @@ def _collection_label(collection):
 
 
 def _collection_icon(collection):
+    if collection.is_embedded_data:
+        return 'SCENE_DATA'
     if collection.color_tag != 'NONE':
         return 'COLLECTION_' + collection.color_tag
     return 'OUTLINER_COLLECTION'
@@ -128,8 +130,9 @@ def _link_targets(operator, context):
                 or _contains_child(parent, child) or _would_cycle(parent, child)):
             continue
         label = _collection_label(candidate)
-        _search_items.append((str(candidate.session_uid), label, ""))
+        _search_items.append((str(candidate.session_uid), label, "", _collection_icon(candidate)))
     _search_items.sort(key=lambda item: item[1].casefold())
+    _search_items = [(*item, index) for index, item in enumerate(_search_items)]
     return _search_items
 
 
@@ -328,25 +331,44 @@ class COLLECTION_PT_CollectionLinked(Panel):
     bl_parent_id = "COLLECTION_PT_link_properties"
 
     def draw(self, context):
-        layout = self.layout
-        collection = context.collection
-        row = layout.row(align=True)
-        row.enabled = collection.is_editable
-        op = row.operator(COLLECTION_OT_link.bl_idname, text="Link Child")
-        op.source_uid = str(collection.session_uid)
-        op.direction = 'CHILD'
-        op = row.operator(COLLECTION_OT_create_linked.bl_idname, text="", icon='ADD')
-        op.source_uid = str(collection.session_uid)
-        op.direction = 'CHILD'
+        _draw_children(self.layout, context.collection)
 
-        for child in collection.children:
-            row = layout.box().row()
-            row.prop(child, "name", text="", icon=_collection_icon(child))
-            button = row.row()
-            button.enabled = collection.is_editable
-            op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)
-            op.parent_uid = str(collection.session_uid)
-            op.child_uid = str(child.session_uid)
+
+def _draw_children(layout, collection):
+    row = layout.row(align=True)
+    row.enabled = collection.is_editable
+    op = row.operator(COLLECTION_OT_link.bl_idname, text="Link Child")
+    op.source_uid = str(collection.session_uid)
+    op.direction = 'CHILD'
+    op = row.operator(COLLECTION_OT_create_linked.bl_idname, text="", icon='ADD')
+    op.source_uid = str(collection.session_uid)
+    op.direction = 'CHILD'
+
+    for child in collection.children:
+        row = layout.box().row()
+        row.prop(child, "name", text="", icon=_collection_icon(child))
+        button = row.row()
+        button.enabled = collection.is_editable
+        op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)
+        op.parent_uid = str(collection.session_uid)
+        op.child_uid = str(child.session_uid)
+
+
+class SCENE_PT_LinkCollections(Panel):
+    """Collections directly linked under the active scene"""
+
+    bl_label = "Collections"
+    bl_idname = "SCENE_PT_link_panel_collections"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None
+
+    def draw(self, context):
+        _draw_children(self.layout, context.scene.collection)
 
 
 _classes = (
@@ -356,6 +378,7 @@ _classes = (
     COLLECTION_PT_LinkProperties,
     COLLECTION_PT_CollectionLinking,
     COLLECTION_PT_CollectionLinked,
+    SCENE_PT_LinkCollections,
 )
 
 

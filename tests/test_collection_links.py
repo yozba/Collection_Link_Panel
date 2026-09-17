@@ -26,6 +26,7 @@ class Collection:
         self.name = name
         self.is_editable = editable
         self.is_embedded_data = False
+        self.color_tag = 'NONE'
         self.children = Children()
         self.users = 0
         self.use_fake_user = False
@@ -56,6 +57,27 @@ class Area:
 
     def tag_redraw(self):
         self.redraw_count += 1
+
+
+class Layout:
+    def __init__(self):
+        self.operators = []
+        self.properties = []
+        self.enabled = True
+
+    def row(self, **kwargs):
+        return self
+
+    def box(self):
+        return self
+
+    def prop(self, item, property_name, **kwargs):
+        self.properties.append((item, property_name))
+
+    def operator(self, idname, **kwargs):
+        op = types.SimpleNamespace()
+        self.operators.append((idname, op))
+        return op
 
 
 class Data:
@@ -191,6 +213,24 @@ class CollectionLinkTests(unittest.TestCase):
         self.assertNotIn(str(middle.session_uid), child_targets)
         self.assertIn(str(available.session_uid), child_targets)
 
+    def test_link_targets_have_collection_and_scene_icons(self):
+        child = Collection("Child")
+        parent = Collection("Parent")
+        parent.color_tag = 'COLOR_02'
+        root = Collection("Scene Root")
+        root.is_embedded_data = True
+        self.data.collections = [child, parent]
+        self.data.scenes = [types.SimpleNamespace(name="Other Scene", collection=root)]
+        link = self.addon.COLLECTION_OT_link()
+        link.source_uid = str(child.session_uid)
+        link.direction = 'PARENT'
+
+        items = self.addon._link_targets(link, None)
+        by_uid = {item[0]: item for item in items}
+        self.assertEqual(by_uid[str(parent.session_uid)][3], 'COLLECTION_COLOR_02')
+        self.assertEqual(by_uid[str(root.session_uid)][3], 'SCENE_DATA')
+        self.assertEqual([item[4] for item in items], list(range(len(items))))
+
     def test_create_parent_links_only_to_source(self):
         child = Collection("Child")
         root = Collection("Scene Root")
@@ -225,6 +265,53 @@ class CollectionLinkTests(unittest.TestCase):
         self.assertEqual(create.execute(context), {'FINISHED'})
         new_child = self.data.collections[-1]
         self.assertIn(new_child, parent.children)
+
+    def test_scene_panel_links_existing_and_new_children(self):
+        root = Collection("Scene Root")
+        root.is_embedded_data = True
+        scene = types.SimpleNamespace(name="Scene", collection=root)
+        self.data.scenes = [scene]
+        existing = Collection("Existing")
+        self.data.collections.append(existing)
+        context = types.SimpleNamespace(
+            scene=scene,
+            window_manager=types.SimpleNamespace(windows=[]),
+        )
+
+        panel = self.addon.SCENE_PT_LinkCollections()
+        panel.layout = Layout()
+        panel.draw(context)
+        self.assertEqual(panel.bl_context, 'scene')
+        self.assertEqual(panel.bl_label, 'Collections')
+        self.assertFalse(hasattr(panel, 'bl_parent_id'))
+        link_button, create_button = [op for _, op in panel.layout.operators]
+        self.assertEqual(link_button.source_uid, str(root.session_uid))
+        self.assertEqual(link_button.direction, 'CHILD')
+        self.assertEqual(create_button.source_uid, str(root.session_uid))
+        self.assertEqual(create_button.direction, 'CHILD')
+
+        link = self.addon.COLLECTION_OT_link()
+        link.source_uid = link_button.source_uid
+        link.direction = link_button.direction
+        link.target_uid = str(existing.session_uid)
+        self.assertEqual(link.execute(context), {'FINISHED'})
+        self.assertIn(existing, root.children)
+
+        panel.layout = Layout()
+        panel.draw(context)
+        self.assertIn((existing, "name"), panel.layout.properties)
+        unlink_button = panel.layout.operators[-1][1]
+        unlink = self.addon.COLLECTION_OT_unlink()
+        unlink.parent_uid = unlink_button.parent_uid
+        unlink.child_uid = unlink_button.child_uid
+        self.assertEqual(unlink.execute(context), {'FINISHED'})
+        self.assertNotIn(existing, root.children)
+
+        create = self.addon.COLLECTION_OT_create_linked()
+        create.source_uid = create_button.source_uid
+        create.direction = create_button.direction
+        self.assertEqual(create.execute(context), {'FINISHED'})
+        self.assertIn(self.data.collections[-1], root.children)
 
 
 if __name__ == "__main__":
