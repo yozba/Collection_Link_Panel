@@ -2,9 +2,9 @@ schema_version = "1.0.0"
 
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
-id = "collection_link_properties"
+id = "collection_link_panel"
 version = "1.0.0"
-name = "Collection Link Properties"
+name = "Collection Link Panel"
 tagline = "This is another extension"
 maintainer = "yozba"
 # Supported types: "add-on", "theme"

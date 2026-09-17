@@ -11,11 +11,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-
 bl_info = {
     "name": "Collection Link Panel",
     "author": "yozba",
-    "description": "Display linked collection relationships in the Collection properties panel",
+    "description": "Display and edit collection links in the Collection properties panel",
     "blender": (4, 2, 0),
     "version": (1, 0, 0),
     "location": "Properties > Collection",
@@ -24,75 +23,347 @@ bl_info = {
 }
 
 import bpy
-from bpy.types import Panel
+from bpy.props import EnumProperty, StringProperty
+from bpy.types import Operator, Panel
+
+
+def _scene_roots():
+    return (scene.collection for scene in bpy.data.scenes)
+
+
+def _find_collection(uid):
+    if not uid:
+        return None
+    for collection in bpy.data.collections:
+        if str(collection.session_uid) == uid:
+            return collection
+    for root in _scene_roots():
+        if str(root.session_uid) == uid:
+            return root
+    return None
+
+
+def _contains_child(parent, child):
+    return any(item == child for item in parent.children)
+
+
+def _parents_of(collection):
+    # user_map does the inverse ID lookup in Blender, instead of scanning every
+    # collection and its children in Python for every panel draw. Scene master
+    # collections are embedded IDs, so include them separately.
+    users = bpy.data.user_map(
+        subset={collection}, value_types={'COLLECTION'}
+    ).get(collection, set())
+    parents = {
+        user for user in users
+        if isinstance(user, bpy.types.Collection) and _contains_child(user, collection)
+    }
+    parents.update(root for root in _scene_roots() if _contains_child(root, collection))
+    return sorted(parents, key=lambda item: item.name.casefold())
+
+
+def _would_cycle(parent, child):
+    if parent == child:
+        return True
+    stack = [child]
+    visited = set()
+    while stack:
+        current = stack.pop()
+        uid = current.session_uid
+        if uid in visited:
+            continue
+        visited.add(uid)
+        for descendant in current.children:
+            if descendant == parent:
+                return True
+            stack.append(descendant)
+    return False
+
+
+def _collection_label(collection):
+    for scene in bpy.data.scenes:
+        if scene.collection == collection:
+            return "Scene Collection: " + scene.name
+    return collection.name
+
+
+def _collection_icon(collection):
+    if collection.color_tag != 'NONE':
+        return 'COLLECTION_' + collection.color_tag
+    return 'OUTLINER_COLLECTION'
+
+
+def _tag_properties_redraw(context):
+    if context is None:
+        return
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'PROPERTIES':
+                area.tag_redraw()
+
+
+# Blender keeps references to dynamic enum strings only while the callback is
+# alive. Retain the item list for the lifetime of the search popup.
+_search_items = []
+
+
+def _link_targets(operator, context):
+    global _search_items
+    source = _find_collection(operator.source_uid)
+    if source is None:
+        _search_items = []
+        return _search_items
+
+    candidates = list(bpy.data.collections)
+    if operator.direction == 'PARENT':
+        candidates.extend(_scene_roots())
+
+    _search_items = []
+    for candidate in candidates:
+        if candidate == source:
+            continue
+        parent, child = ((candidate, source) if operator.direction == 'PARENT'
+                         else (source, candidate))
+        if (child.is_embedded_data or not parent.is_editable
+                or _contains_child(parent, child) or _would_cycle(parent, child)):
+            continue
+        label = _collection_label(candidate)
+        _search_items.append((str(candidate.session_uid), label, ""))
+    _search_items.sort(key=lambda item: item[1].casefold())
+    return _search_items
+
+
+class COLLECTION_OT_link(Operator):
+    """Link the active collection to an existing parent or child"""
+
+    bl_idname = "collection.link_panel_link"
+    bl_label = "Link Collection"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_property = "target_uid"
+
+    source_uid: StringProperty(options={'HIDDEN'})
+    direction: EnumProperty(
+        items=(('PARENT', "Link to Parent", ""),
+               ('CHILD', "Link Child", "")),
+        options={'HIDDEN'},
+    )
+    target_uid: EnumProperty(name="Collection", items=_link_targets)
+
+    def invoke(self, context, event):
+        if not self.source_uid and context.collection:
+            self.source_uid = str(context.collection.session_uid)
+        if _find_collection(self.source_uid) is None:
+            return {'CANCELLED'}
+        context.window_manager.invoke_search_popup(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        source = _find_collection(self.source_uid)
+        target = _find_collection(self.target_uid)
+        if source is None or target is None:
+            self.report({'WARNING'}, "Collection no longer exists")
+            return {'CANCELLED'}
+        parent, child = ((target, source) if self.direction == 'PARENT'
+                         else (source, target))
+        if not parent.is_editable:
+            self.report({'WARNING'}, "Parent collection is not editable")
+            return {'CANCELLED'}
+        if child.is_embedded_data:
+            self.report({'WARNING'}, "Scene root collections cannot be linked as children")
+            return {'CANCELLED'}
+        if _contains_child(parent, child):
+            self.report({'WARNING'}, "Collections are already linked")
+            return {'CANCELLED'}
+        if _would_cycle(parent, child):
+            self.report({'WARNING'}, "Link would create a cycle")
+            return {'CANCELLED'}
+        try:
+            parent.children.link(child)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        _tag_properties_redraw(context)
+        return {'FINISHED'}
+
+
+class COLLECTION_OT_create_linked(Operator):
+    """Create a collection and link it as a parent or child"""
+
+    bl_idname = "collection.link_panel_create_linked"
+    bl_label = "Create Linked Collection"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    source_uid: StringProperty(options={'HIDDEN'})
+    direction: EnumProperty(
+        items=(('PARENT', "New Parent", ""),
+               ('CHILD', "New Child", "")),
+        options={'HIDDEN'},
+    )
+
+    def execute(self, context):
+        source = _find_collection(self.source_uid)
+        if source is None:
+            self.report({'WARNING'}, "Collection no longer exists")
+            return {'CANCELLED'}
+        if self.direction == 'PARENT':
+            if source.is_embedded_data:
+                self.report({'WARNING'}, "Scene root collections cannot be linked as children")
+                return {'CANCELLED'}
+        elif not source.is_editable:
+            self.report({'WARNING'}, "Parent collection is not editable")
+            return {'CANCELLED'}
+
+        new_collection = bpy.data.collections.new("Collection")
+        try:
+            if self.direction == 'PARENT':
+                new_collection.children.link(source)
+            else:
+                source.children.link(new_collection)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            bpy.data.collections.remove(new_collection)
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        if self.direction == 'PARENT':
+            new_collection.use_fake_user = True
+        _tag_properties_redraw(context)
+        return {'FINISHED'}
+
+
+class COLLECTION_OT_unlink(Operator):
+    """Remove one parent-child link without deleting either collection"""
+
+    bl_idname = "collection.link_panel_unlink"
+    bl_label = "Unlink Collection"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    parent_uid: StringProperty(options={'HIDDEN'})
+    child_uid: StringProperty(options={'HIDDEN'})
+
+    def execute(self, context):
+        parent = _find_collection(self.parent_uid)
+        child = _find_collection(self.child_uid)
+        if parent is None or child is None or not _contains_child(parent, child):
+            self.report({'WARNING'}, "Collection link no longer exists")
+            return {'CANCELLED'}
+        if not parent.is_editable:
+            self.report({'WARNING'}, "Parent collection is not editable")
+            return {'CANCELLED'}
+        try:
+            parent.children.unlink(child)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        if child.users == 0:
+            if child.is_editable:
+                child.use_fake_user = True
+                self.report({'INFO'}, "Unlinked collection kept with Fake User")
+            else:
+                self.report({'WARNING'}, "Unlinked collection has no users")
+        _tag_properties_redraw(context)
+        return {'FINISHED'}
+
 
 class COLLECTION_PT_LinkProperties(Panel):
-    """Collection Link Panel"""
-    bl_label = "Collection Link Panel"
+    """Collection links"""
+
+    bl_label = "Links"
     bl_idname = "COLLECTION_PT_link_properties"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
 
+    @classmethod
+    def poll(cls, context):
+        return context.collection is not None
+
     def draw(self, context):
         pass
 
+
 class COLLECTION_PT_CollectionLinking(Panel):
-    """Collection Linking"""
-    bl_label = "Linking to"
+    """Collections containing the active collection"""
+
+    bl_label = "Parents"
     bl_idname = "COLLECTION_PT_collection_linking"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
     bl_parent_id = "COLLECTION_PT_link_properties"
-    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
         collection = context.collection
-        
-        col = layout.column()
-        parent_count = 0
-        for other_col in bpy.data.collections:
-            if collection in other_col.children.values():
-                parent_count += 1
-                col.label(text=other_col.name, icon='OUTLINER_COLLECTION')
+        row = layout.row(align=True)
+        op = row.operator(COLLECTION_OT_link.bl_idname, text="Link to Parent")
+        op.source_uid = str(collection.session_uid)
+        op.direction = 'PARENT'
+        button = row.row(align=True)
+        button.enabled = not collection.is_embedded_data
+        op = button.operator(COLLECTION_OT_create_linked.bl_idname, text="", icon='ADD')
+        op.source_uid = str(collection.session_uid)
+        op.direction = 'PARENT'
 
-        if parent_count == 0:
-            col.label(text="None")
+        parents = _parents_of(collection)
+        for parent in parents:
+            row = layout.box().row()
+            if parent.is_embedded_data:
+                row.label(text=_collection_label(parent), icon=_collection_icon(parent))
+            else:
+                row.prop(parent, "name", text="", icon=_collection_icon(parent))
+            button = row.row()
+            button.enabled = parent.is_editable
+            op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)
+            op.parent_uid = str(parent.session_uid)
+            op.child_uid = str(collection.session_uid)
+
 
 class COLLECTION_PT_CollectionLinked(Panel):
-    """Collection Linked"""
-    bl_label = "Linked from"
+    """Collections directly linked under the active collection"""
+
+    bl_label = "Children"
     bl_idname = "COLLECTION_PT_collection_linked"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
     bl_parent_id = "COLLECTION_PT_link_properties"
-    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
         collection = context.collection
-        
-        col = layout.column()
-        child_count = len(collection.children)
-        
-        if child_count > 0:
-            for child_col in collection.children:
-                row = col.row()
-                row.label(text=child_col.name, icon='OUTLINER_COLLECTION')
-        else:
-            col.label(text="None")
+        row = layout.row(align=True)
+        row.enabled = collection.is_editable
+        op = row.operator(COLLECTION_OT_link.bl_idname, text="Link Child")
+        op.source_uid = str(collection.session_uid)
+        op.direction = 'CHILD'
+        op = row.operator(COLLECTION_OT_create_linked.bl_idname, text="", icon='ADD')
+        op.source_uid = str(collection.session_uid)
+        op.direction = 'CHILD'
+
+        for child in collection.children:
+            row = layout.box().row()
+            row.prop(child, "name", text="", icon=_collection_icon(child))
+            button = row.row()
+            button.enabled = collection.is_editable
+            op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)
+            op.parent_uid = str(collection.session_uid)
+            op.child_uid = str(child.session_uid)
+
+
+_classes = (
+    COLLECTION_OT_link,
+    COLLECTION_OT_create_linked,
+    COLLECTION_OT_unlink,
+    COLLECTION_PT_LinkProperties,
+    COLLECTION_PT_CollectionLinking,
+    COLLECTION_PT_CollectionLinked,
+)
 
 
 def register():
-    bpy.utils.register_class(COLLECTION_PT_LinkProperties)
-    bpy.utils.register_class(COLLECTION_PT_CollectionLinking)
-    bpy.utils.register_class(COLLECTION_PT_CollectionLinked)
+    for cls in _classes:
+        bpy.utils.register_class(cls)
 
 
 def unregister():
-    bpy.utils.unregister_class(COLLECTION_PT_LinkProperties)
-    bpy.utils.unregister_class(COLLECTION_PT_CollectionLinking)
-    bpy.utils.unregister_class(COLLECTION_PT_CollectionLinked)
+    for cls in reversed(_classes):
+        bpy.utils.unregister_class(cls)
