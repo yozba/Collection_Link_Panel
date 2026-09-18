@@ -16,7 +16,7 @@ bl_info = {
     "author": "yozba",
     "description": "Display and edit collection links in Collection and Scene properties",
     "blender": (4, 2, 0),
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "location": "Properties > Collection, Scene",
     "warning": "",
     "category": "Scene",
@@ -48,11 +48,10 @@ def _contains_child(parent, child):
 
 
 def _parents_of(collection):
-    # user_map does the inverse ID lookup in Blender, instead of scanning every
-    # collection and its children in Python for every panel draw. Scene master
-    # collections are embedded IDs, so include them separately.
+    # Only collection users and collection links are relevant. Filtering both
+    # sides avoids converting object references to Python IDs.
     users = bpy.data.user_map(
-        subset={collection}, value_types={'COLLECTION'}
+        subset={collection}, key_types={'COLLECTION'}, value_types={'COLLECTION'}
     ).get(collection, set())
     parents = {
         user for user in users
@@ -78,6 +77,36 @@ def _would_cycle(parent, child):
                 return True
             stack.append(descendant)
     return False
+
+
+def _descendant_uids(collection):
+    visited = set()
+    stack = [collection]
+    while stack:
+        current = stack.pop()
+        uid = current.session_uid
+        if uid in visited:
+            continue
+        visited.add(uid)
+        stack.extend(current.children)
+    return visited
+
+
+def _ancestor_uids(collection, collections):
+    parents_by_child = {}
+    for parent in collections:
+        for child in parent.children:
+            parents_by_child.setdefault(child.session_uid, set()).add(parent.session_uid)
+
+    visited = set()
+    stack = [collection.session_uid]
+    while stack:
+        uid = stack.pop()
+        if uid in visited:
+            continue
+        visited.add(uid)
+        stack.extend(parents_by_child.get(uid, ()))
+    return visited
 
 
 def _collection_label(collection):
@@ -116,20 +145,33 @@ def _link_targets(operator, context):
         _search_items = []
         return _search_items
 
-    candidates = list(bpy.data.collections)
+    collections = list(bpy.data.collections)
+    candidates = [(collection, collection.name) for collection in collections]
     if operator.direction == 'PARENT':
-        candidates.extend(_scene_roots())
+        if source.is_embedded_data:
+            _search_items = []
+            return _search_items
+        candidates.extend(
+            (scene.collection, "Scene Collection: " + scene.name)
+            for scene in bpy.data.scenes
+        )
+        cycle_uids = _descendant_uids(source)
+        linked_uids = {parent.session_uid for parent in _parents_of(source)}
+    else:
+        if not source.is_editable:
+            _search_items = []
+            return _search_items
+        cycle_uids = _ancestor_uids(source, collections)
+        linked_uids = {child.session_uid for child in source.children}
 
     _search_items = []
-    for candidate in candidates:
-        if candidate == source:
+    for candidate, label in candidates:
+        if candidate.session_uid in cycle_uids or candidate.session_uid in linked_uids:
             continue
         parent, child = ((candidate, source) if operator.direction == 'PARENT'
                          else (source, candidate))
-        if (child.is_embedded_data or not parent.is_editable
-                or _contains_child(parent, child) or _would_cycle(parent, child)):
+        if child.is_embedded_data or not parent.is_editable:
             continue
-        label = _collection_label(candidate)
         _search_items.append((str(candidate.session_uid), label, "", _collection_icon(candidate)))
     _search_items.sort(key=lambda item: item[1].casefold())
     _search_items = [(*item, index) for index, item in enumerate(_search_items)]

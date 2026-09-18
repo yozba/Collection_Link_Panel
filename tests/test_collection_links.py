@@ -86,8 +86,9 @@ class Data:
         self.scenes = []
         self.user_map_calls = 0
 
-    def user_map(self, *, subset, value_types):
+    def user_map(self, *, subset, key_types, value_types):
         self.user_map_calls += 1
+        self.user_map_filters = (key_types, value_types)
         child = next(iter(subset))
         users = {parent for parent in self.collections if child in parent.children}
         return {child: users}
@@ -132,6 +133,7 @@ class CollectionLinkTests(unittest.TestCase):
 
         self.assertEqual(set(self.addon._parents_of(child)), {parent, root})
         self.assertEqual(self.data.user_map_calls, 1)
+        self.assertEqual(self.data.user_map_filters, ({'COLLECTION'}, {'COLLECTION'}))
 
     def test_link_rejects_cycle_and_unlink_preserves_orphan(self):
         parent = Collection("Parent")
@@ -212,6 +214,29 @@ class CollectionLinkTests(unittest.TestCase):
         self.assertNotIn(str(ancestor.session_uid), child_targets)
         self.assertNotIn(str(middle.session_uid), child_targets)
         self.assertIn(str(available.session_uid), child_targets)
+
+    def test_link_targets_exclude_existing_links(self):
+        source = Collection("Source")
+        parent = Collection("Parent")
+        child = Collection("Child")
+        available = Collection("Available")
+        root = Collection("Scene Root")
+        root.is_embedded_data = True
+        parent.children.link(source)
+        source.children.link(child)
+        root.children.link(source)
+        self.data.collections = [source, parent, child, available]
+        self.data.scenes = [types.SimpleNamespace(name="Scene", collection=root)]
+
+        link = self.addon.COLLECTION_OT_link()
+        link.source_uid = str(source.session_uid)
+        link.direction = 'PARENT'
+        parent_targets = {item[0] for item in self.addon._link_targets(link, None)}
+        self.assertEqual(parent_targets, {str(available.session_uid)})
+
+        link.direction = 'CHILD'
+        child_targets = {item[0] for item in self.addon._link_targets(link, None)}
+        self.assertEqual(child_targets, {str(available.session_uid)})
 
     def test_link_targets_have_collection_and_scene_icons(self):
         child = Collection("Child")
