@@ -2,6 +2,13 @@
 
 Blender 4.2+ extension for viewing and editing collection links in Collection and Scene Properties.
 
+## Review and Testing
+
+After installing and enabling the extension, its panels are available at:
+
+- `Properties > Collection > Links`
+- `Properties > Scene > Collections`
+
 ## Releases
 
 Push a tag matching `v` plus the version in `blender_manifest.toml` to build and publish a GitHub Release. For example, after updating both the manifest version and `bl_info["version"]`:

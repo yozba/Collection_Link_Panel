@@ -313,6 +313,7 @@ class COLLECTION_PT_LinkProperties(Panel):
 
     bl_label = "Links"
     bl_idname = "COLLECTION_PT_link_properties"
+    bl_options = {'DEFAULT_CLOSED'}
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
@@ -330,6 +331,7 @@ class COLLECTION_PT_CollectionLinking(Panel):
 
     bl_label = "Parents"
     bl_idname = "COLLECTION_PT_collection_linking"
+    bl_options = {'DEFAULT_CLOSED'}
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
@@ -367,6 +369,7 @@ class COLLECTION_PT_CollectionLinked(Panel):
 
     bl_label = "Children"
     bl_idname = "COLLECTION_PT_collection_linked"
+    bl_options = {'DEFAULT_CLOSED'}
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "collection"
@@ -401,6 +404,7 @@ class SCENE_PT_LinkCollections(Panel):
 
     bl_label = "Collections"
     bl_idname = "SCENE_PT_link_panel_collections"
+    bl_options = {'DEFAULT_CLOSED'}
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "scene"
