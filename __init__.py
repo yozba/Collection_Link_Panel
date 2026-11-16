@@ -112,7 +112,7 @@ def _ancestor_uids(collection, collections):
 def _collection_label(collection):
     for scene in bpy.data.scenes:
         if scene.collection == collection:
-            return "Scene Collection: " + scene.name
+            return scene.name
     return collection.name
 
 
@@ -122,6 +122,40 @@ def _collection_icon(collection):
     if collection.color_tag != 'NONE':
         return 'COLLECTION_' + collection.color_tag
     return 'OUTLINER_COLLECTION'
+
+
+def _collection_status(collection):
+    status = []
+    if collection.library is not None:
+        status.append(('L', 'LIBRARY_DATA_DIRECT', "Linked Library"))
+    elif collection.override_library is not None:
+        status.append(('O', 'LIBRARY_DATA_OVERRIDE', "Library Override"))
+    # Embedded scene roots are owned by their scene, not reference-counted
+    # independently like regular collections.
+    if not collection.is_embedded_data:
+        if collection.use_fake_user:
+            status.append(('F', 'FAKE_USER_ON', "Fake User"))
+        elif collection.users == 0:
+            status.append(('0', 'ORPHAN_DATA', "Unused (0 users)"))
+    return status
+
+
+def _draw_collection_status(layout, collection):
+    for _, icon, _ in _collection_status(collection):
+        layout.label(text="", icon=icon)
+
+
+def _draw_collection_name(layout, collection):
+    icons = layout.row(align=True)
+    icons.alignment = 'LEFT'
+    icons.label(text="", icon=_collection_icon(collection))
+    _draw_collection_status(icons, collection)
+    if (collection.is_embedded_data or collection.library is not None
+            or collection.override_library is not None
+            or not collection.is_editable):
+        layout.label(text=_collection_label(collection))
+    else:
+        layout.prop(collection, "name", text="")
 
 
 def _tag_properties_redraw(context):
@@ -164,7 +198,7 @@ def _link_targets(operator, context):
         cycle_uids = _ancestor_uids(source, collections)
         linked_uids = {child.session_uid for child in source.children}
 
-    _search_items = []
+    items = []
     for candidate, label in candidates:
         if candidate.session_uid in cycle_uids or candidate.session_uid in linked_uids:
             continue
@@ -172,9 +206,15 @@ def _link_targets(operator, context):
                          else (source, candidate))
         if child.is_embedded_data or not parent.is_editable:
             continue
-        _search_items.append((str(candidate.session_uid), label, "", _collection_icon(candidate)))
-    _search_items.sort(key=lambda item: item[1].casefold())
-    _search_items = [(*item, index) for index, item in enumerate(_search_items)]
+        sort_name = label.casefold()
+        status = _collection_status(candidate)
+        if status:
+            label = "".join(item[0] for item in status) + "  " + label
+        description = "; ".join(item[2] for item in status)
+        item = (str(candidate.session_uid), label, description, _collection_icon(candidate))
+        items.append((sort_name, item))
+    items.sort(key=lambda item: item[0])
+    _search_items = [(*item, index) for index, (_, item) in enumerate(items)]
     return _search_items
 
 
@@ -353,10 +393,7 @@ class COLLECTION_PT_CollectionLinking(Panel):
         parents = _parents_of(collection)
         for parent in parents:
             row = layout.box().row()
-            if parent.is_embedded_data:
-                row.label(text=_collection_label(parent), icon=_collection_icon(parent))
-            else:
-                row.prop(parent, "name", text="", icon=_collection_icon(parent))
+            _draw_collection_name(row, parent)
             button = row.row()
             button.enabled = parent.is_editable
             op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)
@@ -391,7 +428,7 @@ def _draw_children(layout, collection):
 
     for child in collection.children:
         row = layout.box().row()
-        row.prop(child, "name", text="", icon=_collection_icon(child))
+        _draw_collection_name(row, child)
         button = row.row()
         button.enabled = collection.is_editable
         op = button.operator(COLLECTION_OT_unlink.bl_idname, text="", icon='X', emboss=False)

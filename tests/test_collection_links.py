@@ -30,6 +30,8 @@ class Collection:
         self.children = Children()
         self.users = 0
         self.use_fake_user = False
+        self.library = None
+        self.override_library = None
         self.session_uid = Collection.next_uid
         Collection.next_uid += 1
 
@@ -63,6 +65,8 @@ class Layout:
     def __init__(self):
         self.operators = []
         self.properties = []
+        self.labels = []
+        self.draw_calls = []
         self.enabled = True
 
     def row(self, **kwargs):
@@ -73,6 +77,11 @@ class Layout:
 
     def prop(self, item, property_name, **kwargs):
         self.properties.append((item, property_name))
+        self.draw_calls.append(('prop', (item, property_name)))
+
+    def label(self, **kwargs):
+        self.labels.append(kwargs)
+        self.draw_calls.append(('label', kwargs))
 
     def operator(self, idname, **kwargs):
         op = types.SimpleNamespace()
@@ -255,6 +264,135 @@ class CollectionLinkTests(unittest.TestCase):
         self.assertEqual(by_uid[str(parent.session_uid)][3], 'COLLECTION_COLOR_02')
         self.assertEqual(by_uid[str(root.session_uid)][3], 'SCENE_DATA')
         self.assertEqual([item[4] for item in items], list(range(len(items))))
+
+    def test_link_targets_show_data_status_without_changing_names_or_type_icons(self):
+        source = Collection("Source")
+        unused = Collection("Unused")
+        fake = Collection("Kept")
+        fake.use_fake_user = True
+        fake.users = 1
+        linked = Collection("Linked", editable=False)
+        linked.library = types.SimpleNamespace(name="Library")
+        linked.users = 1
+        override = Collection("Overridden")
+        override.override_library = object()
+        override.users = 1
+        override.color_tag = 'COLOR_02'
+        used = Collection("Used Elsewhere")
+        used.users = 1
+        root = Collection("Scene Root")
+        root.is_embedded_data = True
+        self.data.collections = [source, unused, fake, linked, override, used]
+        self.data.scenes = [types.SimpleNamespace(name="Other Scene", collection=root)]
+        link = self.addon.COLLECTION_OT_link()
+        link.source_uid = str(source.session_uid)
+
+        for direction in ('PARENT', 'CHILD'):
+            with self.subTest(direction=direction):
+                link.direction = direction
+                items = {item[0]: item for item in self.addon._link_targets(link, None)}
+                self.assertEqual(items[str(unused.session_uid)][1], "0  Unused")
+                self.assertEqual(items[str(fake.session_uid)][1], "F  Kept")
+                self.assertEqual(items[str(override.session_uid)][1], "O  Overridden")
+                self.assertEqual(items[str(override.session_uid)][2], "Library Override")
+                self.assertEqual(items[str(override.session_uid)][3], 'COLLECTION_COLOR_02')
+                self.assertEqual(items[str(used.session_uid)][1], "Used Elsewhere")
+                if direction == 'CHILD':
+                    self.assertEqual(items[str(linked.session_uid)][1], "L  Linked")
+                    self.assertEqual(items[str(linked.session_uid)][3], 'OUTLINER_COLLECTION')
+                    self.assertEqual(list(items), [str(item.session_uid) for item in
+                                                 (fake, linked, override, unused, used)])
+                else:
+                    self.assertNotIn(str(linked.session_uid), items)
+                    self.assertEqual(items[str(root.session_uid)][1], "Scene Collection: Other Scene")
+                    self.assertEqual(items[str(root.session_uid)][3], 'SCENE_DATA')
+                    self.assertEqual(list(items), [str(item.session_uid) for item in
+                                                 (fake, override, root, unused, used)])
+
+        self.assertEqual([item.name for item in self.data.collections],
+                         ["Source", "Unused", "Kept", "Linked", "Overridden", "Used Elsewhere"])
+
+        override.use_fake_user = True
+        link.direction = 'CHILD'
+        items = {item[0]: item for item in self.addon._link_targets(link, None)}
+        self.assertEqual(items[str(override.session_uid)][1], "OF  Overridden")
+        self.assertEqual(items[str(override.session_uid)][2], "Library Override; Fake User")
+
+    def test_panels_show_status_for_parents_and_children(self):
+        source = Collection("Source")
+        parent = Collection("Kept Parent")
+        parent.use_fake_user = True
+        parent.users = 1
+        parent.children.link(source)
+        self.data.collections = [source, parent]
+        panel = self.addon.COLLECTION_PT_CollectionLinking()
+        panel.layout = Layout()
+        panel.draw(types.SimpleNamespace(collection=source))
+        self.assertIn({"text": "", "icon": 'FAKE_USER_ON'}, panel.layout.labels)
+        self.assertIn((parent, "name"), panel.layout.properties)
+        self.assertEqual(panel.layout.draw_calls[:3], [
+            ('label', {"text": "", "icon": 'OUTLINER_COLLECTION'}),
+            ('label', {"text": "", "icon": 'FAKE_USER_ON'}),
+            ('prop', (parent, "name")),
+        ])
+
+        linked = Collection("Linked", editable=False)
+        linked.library = types.SimpleNamespace(name="Library")
+        linked.children.link(source)
+        self.data.collections.append(linked)
+        panel = self.addon.COLLECTION_PT_CollectionLinking()
+        panel.layout = Layout()
+        panel.draw(types.SimpleNamespace(collection=source))
+        self.assertNotIn((linked, "name"), panel.layout.properties)
+        self.assertIn({"text": "Linked"}, panel.layout.labels)
+        self.assertIn({"text": "", "icon": 'LIBRARY_DATA_DIRECT'}, panel.layout.labels)
+        linked.children.unlink(source)
+        # Library-linked names stay labels even if the ID is marked editable.
+        linked.is_editable = True
+        overridden = Collection("Override")
+        overridden.override_library = object()
+        source.children.link(linked)
+        source.children.link(overridden)
+        context = types.SimpleNamespace(collection=source,
+                                        scene=types.SimpleNamespace(collection=source))
+        for panel_type in (self.addon.COLLECTION_PT_CollectionLinked,
+                           self.addon.SCENE_PT_LinkCollections):
+            with self.subTest(panel=panel_type.__name__):
+                panel = panel_type()
+                panel.layout = Layout()
+                panel.draw(context)
+                self.assertIn({"text": "", "icon": 'LIBRARY_DATA_DIRECT'}, panel.layout.labels)
+                self.assertIn({"text": "", "icon": 'LIBRARY_DATA_OVERRIDE'}, panel.layout.labels)
+                self.assertNotIn((linked, "name"), panel.layout.properties)
+                self.assertIn({"text": "Linked"}, panel.layout.labels)
+                self.assertNotIn((overridden, "name"), panel.layout.properties)
+                self.assertIn({"text": "Override"}, panel.layout.labels)
+                self.assertEqual(panel.layout.draw_calls[:6], [
+                    ('label', {"text": "", "icon": 'OUTLINER_COLLECTION'}),
+                    ('label', {"text": "", "icon": 'LIBRARY_DATA_DIRECT'}),
+                    ('label', {"text": "Linked"}),
+                    ('label', {"text": "", "icon": 'OUTLINER_COLLECTION'}),
+                    ('label', {"text": "", "icon": 'LIBRARY_DATA_OVERRIDE'}),
+                    ('label', {"text": "Override"}),
+                ])
+
+    def test_unused_parent_status_updates_after_it_is_linked(self):
+        source = Collection("Source")
+        parent = Collection("Parent")
+        parent.children.link(source)
+        root = Collection("Scene Root")
+        root.is_embedded_data = True
+        self.data.collections = [source, parent]
+        context = types.SimpleNamespace(collection=source)
+        panel = self.addon.COLLECTION_PT_CollectionLinking()
+        panel.layout = Layout()
+        panel.draw(context)
+        self.assertIn({"text": "", "icon": 'ORPHAN_DATA'}, panel.layout.labels)
+
+        root.children.link(parent)
+        panel.layout = Layout()
+        panel.draw(context)
+        self.assertNotIn({"text": "", "icon": 'ORPHAN_DATA'}, panel.layout.labels)
 
     def test_create_parent_links_only_to_source(self):
         child = Collection("Child")
