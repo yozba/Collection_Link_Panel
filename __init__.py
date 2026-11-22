@@ -16,7 +16,7 @@ bl_info = {
     "author": "yozba",
     "description": "Display and edit collection links in Collection and Scene properties",
     "blender": (4, 2, 0),
-    "version": (1, 0, 3),
+    "version": (1, 0, 4),
     "location": "Properties > Collection, Scene",
     "warning": "",
     "category": "Scene",
